@@ -1,8 +1,11 @@
 from api.data_fetcher import get_players_dataframe, get_fixtures
 from analysis.team_analyzer import get_squad_player_ids, build_squad_from_ids, get_team_summary, flag_injuries
 from analysis.transfer_engine import suggest_transfers, suggest_captain
+from dotenv import load_dotenv
+import os
 
-MY_TEAM_ID = 2093872
+load_dotenv()
+MY_TEAM_ID = int(os.getenv("MY_TEAM_ID"))
 GAMEWEEK = 1
 BANK = 0.5
 
