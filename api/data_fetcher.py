@@ -36,6 +36,8 @@ def get_manager_info(team_id):
     """Returns a dict with manager info for a given team_id"""
     url = f"https://fantasy.premierleague.com/api/entry/{team_id}/"
     response = requests.get(url)
+    if response.status_code == 404:
+        return None
     response.raise_for_status()
     return response.json()
 
@@ -52,6 +54,20 @@ def get_fixtures():
     response.raise_for_status()
     return pd.DataFrame(response.json())
 
+def get_current_gameweek():
+    """Returns the id of the currently active gameweek, or the next upcoming one."""
+    data = fetch_raw_data()
+    events = data["events"]
+
+    current = [e for e in events if e["is_current"]]
+    if current:
+        return current[0]["id"]
+
+    upcoming = [e for e in events if e["is_next"]]
+    if upcoming:
+        return upcoming[0]["id"]
+
+    return 1
 
 
 
