@@ -27,7 +27,7 @@ async def on_ready():
     await tree.sync()
     print(f'Logged in as {client.user}!')
 
-from analysis.team_analyzer import get_team_summary, get_squad_player_ids, build_squad_from_ids
+from analysis.team_analyzer import get_team_summary, get_squad_player_ids, build_squad_from_ids, load_mock_squad
 
 # MY_TEAM_ID = int(os.getenv("MY_TEAM_ID"))
 GAMEWEEK = get_current_gameweek()
@@ -125,7 +125,20 @@ async def captain_command(interaction: discord.Interaction, team_id: Optional[in
 async def register_command(interaction: discord.Interaction, team_id: int):
     register_user(interaction.user.id, team_id)
     await interaction.response.send_message(f"✅ Registered team ID {team_id}. You can now use /team, /transfers, and /captain without entering it again.")
-    
+
+
+@tree.command(name="testteam", description="[TEST] View a squad using mock data, bypassing live picks")
+async def testteam_command(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    player_ids = load_mock_squad()  # from analysis/team_analyzer.py
+    squad = build_squad_from_ids(player_ids)
+
+    lines = ["**[TEST MODE] Mock Squad**"]
+    for _, player in squad.iterrows():
+        lines.append(f"{player['web_name']} ({player['position']}) - {player['total_points']} pts")
+
+    await interaction.followup.send("\n".join(lines))
 
 
 client.run(TOKEN)
