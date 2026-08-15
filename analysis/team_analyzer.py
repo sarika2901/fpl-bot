@@ -3,30 +3,35 @@ import requests
 import pandas as pd
 from api.data_fetcher import get_players_dataframe, get_manager_info, get_manager_picks, get_fixtures
 
+
 def load_mock_squad():
     with open("config/my_squad.json") as f:
         data = json.load(f)
     return data["player_ids"]
 
 def get_squad_player_ids(team_id, gameweek):
-    """Returns real picks if the season has started, otherwise the mock squad."""
+    """
+    Returns (status, player_ids) where status is one of:
+      "ok"                - picks retrieved successfully
+      "invalid_team_id"   - team_id doesn't exist on FPL
+      "season_not_started"- team exists but hasn't entered any gameweek yet
+      "picks_unavailable"  - team has entered events, but this gameweek's picks aren't ready
+    """
     info = get_manager_info(team_id)
 
     if info is None:
-        return None  # Team ID is invalid
+        return "invalid_team_id", None  # Team ID is invalid
 
     if len(info["entered_events"]) == 0:
         # print("⚠️  Season hasn't started for this team yet — using mock squad instead.")
         # return load_mock_squad()
-        return None
+        return "season_not_started", None
 
     try:
         picks_data = get_manager_picks(team_id, gameweek)
-        return [p["element"] for p in picks_data["picks"]]
+        return "ok", [p["element"] for p in picks_data["picks"]]
     except requests.exceptions.HTTPError:
-        # print("⚠️  Picks data unavailable — using mock squad instead.")
-        # return load_mock_squad()
-        return None
+        return "picks_unavailable", None
 
 def build_squad_from_ids(player_ids):
     """Given a list of player IDs, return their full stats as a DataFrame."""

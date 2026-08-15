@@ -45,18 +45,41 @@ async def team_command(interaction: discord.Interaction, team_id: Optional[int] 
         return
 
     gameweek = get_current_gameweek()
-    player_ids = get_squad_player_ids(team_id, gameweek)
+    status, player_ids = get_squad_player_ids(team_id, gameweek)
 
-    if player_ids is None:
+    if status == "invalid_team_id":
         await interaction.followup.send(
-            "⚠️ Your squad isn't available yet — this usually means the season hasn't "
-            "started, or your team ID is incorrect."
+            "❌ That team ID doesn't exist on the FPL site. Double-check it in your "
+            "FPL team URL and try again, or re-register with `/register`."
         )
         return
-    
-    summary = get_team_summary(team_id)
-    
-    squad = build_squad_from_ids(player_ids)
+    elif status == "season_not_started":
+        await interaction.followup.send(
+            "🗓️ The season hasn't started for this team yet — your squad picks aren't "
+            "available until after gameweek 1 kicks off (Aug 22)."
+        )
+        return
+    elif status == "picks_unavailable":
+        await interaction.followup.send(
+            "⚠️ Your team ID is valid, but this gameweek's picks aren't available yet "
+            "(they usually lock in shortly after the gameweek deadline). Try again closer "
+            "to kickoff."
+        )
+        return
+
+    # if player_ids is None:
+    #     await interaction.followup.send(
+    #         "⚠️ Your squad isn't available yet — this usually means the season hasn't "
+    #         "started, or your team ID is incorrect."
+    #     )
+    #     return
+    try:
+        summary = get_team_summary(team_id)
+        squad = build_squad_from_ids(player_ids)
+    except Exception as e:
+        print(f"[team_command] error: {e}")
+        await interaction.followup.send("⚠️ Couldn't fetch live data right now — try again in a minute.")
+        return
 
     lines = [f"**{summary['team_name']}** - {summary['overall_points']} pts"]
     for _, player in squad.iterrows():
@@ -77,18 +100,43 @@ async def transfers_command(interaction: discord.Interaction, team_id: Optional[
         return
 
     gameweek = get_current_gameweek()
-    player_ids = get_squad_player_ids(team_id, gameweek)
+    status, player_ids = get_squad_player_ids(team_id, gameweek)
 
-    if player_ids is None:
-            await interaction.followup.send(
-                "⚠️ Your squad isn't available yet — this usually means the season hasn't "
-                "started, or your team ID is incorrect."
-            )
-            return
+    if status == "invalid_team_id":
+        await interaction.followup.send(
+            "❌ That team ID doesn't exist on the FPL site. Double-check it in your "
+            "FPL team URL and try again, or re-register with `/register`."
+        )
+        return
+    elif status == "season_not_started":
+        await interaction.followup.send(
+            "🗓️ The season hasn't started for this team yet — your squad picks aren't "
+            "available until after gameweek 1 kicks off (Aug 22)."
+        )
+        return
+    elif status == "picks_unavailable":
+        await interaction.followup.send(
+            "⚠️ Your team ID is valid, but this gameweek's picks aren't available yet "
+            "(they usually lock in shortly after the gameweek deadline). Try again closer "
+            "to kickoff."
+        )
+        return
 
-    squad = build_squad_from_ids(player_ids)
-    all_players = get_players_dataframe()
-    suggestions = suggest_transfers(squad, all_players, player_ids, bank=0.5)
+    # if player_ids is None:
+    #         await interaction.followup.send(
+    #             "⚠️ Your squad isn't available yet — this usually means the season hasn't "
+    #             "started, or your team ID is incorrect."
+    #         )
+    #         return
+
+    try:
+        squad = build_squad_from_ids(player_ids)
+        all_players = get_players_dataframe()
+        suggestions = suggest_transfers(squad, all_players, player_ids, gameweek, bank=0.5)
+    except Exception as e:
+        print(f"[transfers_command] error: {e}")
+        await interaction.followup.send("⚠️ Couldn't fetch live data right now — try again in a minute.")
+        return
 
     lines = ["**Transfer Suggestions:**"]
     for _,row in suggestions.iterrows():
@@ -107,16 +155,43 @@ async def captain_command(interaction: discord.Interaction, team_id: Optional[in
         return
 
     gameweek = get_current_gameweek()
-    player_ids = get_squad_player_ids(team_id, gameweek)
-    if player_ids is None:
+    status, player_ids = get_squad_player_ids(team_id, gameweek)
+
+    if status == "invalid_team_id":
         await interaction.followup.send(
-            "⚠️ Your squad isn't available yet — this usually means the season hasn't "
-            "started, or your team ID is incorrect."
+            "❌ That team ID doesn't exist on the FPL site. Double-check it in your "
+            "FPL team URL and try again, or re-register with `/register`."
         )
         return
-    squad = build_squad_from_ids(player_ids)
-    fixtures_df = get_fixtures()
-    captain = suggest_captain(squad, fixtures_df)
+    elif status == "season_not_started":
+        await interaction.followup.send(
+            "🗓️ The season hasn't started for this team yet — your squad picks aren't "
+            "available until after gameweek 1 kicks off (Aug 22)."
+        )
+        return
+    elif status == "picks_unavailable":
+        await interaction.followup.send(
+            "⚠️ Your team ID is valid, but this gameweek's picks aren't available yet "
+            "(they usually lock in shortly after the gameweek deadline). Try again closer "
+            "to kickoff."
+        )
+        return
+    
+    # if player_ids is None:
+    #     await interaction.followup.send(
+    #         "⚠️ Your squad isn't available yet — this usually means the season hasn't "
+    #         "started, or your team ID is incorrect."
+    #     )
+    #     return
+    
+    try:
+        squad = build_squad_from_ids(player_ids)
+        fixtures_df = get_fixtures()
+        captain = suggest_captain(squad, fixtures_df, gameweek)
+    except Exception as e:
+        print(f"[captain_command] error: {e}")
+        await interaction.followup.send("⚠️ Couldn't fetch live data right now — try again in a minute.")
+        return
 
     await interaction.followup.send(f"Captain pick: **{captain['web_name']}**")
 
