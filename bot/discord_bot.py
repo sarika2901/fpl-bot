@@ -5,12 +5,13 @@ from pathlib import Path
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
+import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from api.data_fetcher import get_current_gameweek
+from api.data_fetcher import get_current_gameweek, get_players_dataframe, get_fixtures
 from bot.user_registry import get_registered_team, register_user
 from typing import Optional
 
@@ -27,7 +28,7 @@ async def on_ready():
     await tree.sync()
     print(f'Logged in as {client.user}!')
 
-from analysis.team_analyzer import get_team_summary, get_squad_player_ids, build_squad_from_ids, load_mock_squad
+from analysis.team_analyzer import get_team_summary, get_squad_player_ids, build_squad_from_ids, load_mock_squad, flag_injuries, suggest_starting_xi
 
 # MY_TEAM_ID = int(os.getenv("MY_TEAM_ID"))
 GAMEWEEK = get_current_gameweek()
@@ -45,7 +46,7 @@ async def team_command(interaction: discord.Interaction, team_id: Optional[int] 
         return
 
     gameweek = get_current_gameweek()
-    status, player_ids = get_squad_player_ids(team_id, gameweek)
+    status, player_ids, bank = get_squad_player_ids(team_id, gameweek)
 
     if status == "invalid_team_id":
         await interaction.followup.send(
@@ -76,18 +77,36 @@ async def team_command(interaction: discord.Interaction, team_id: Optional[int] 
     try:
         summary = get_team_summary(team_id)
         squad = build_squad_from_ids(player_ids)
+        fixtures_df = get_fixtures()
+        squad = suggest_starting_xi(squad, fixtures_df)
     except Exception as e:
         print(f"[team_command] error: {e}")
         await interaction.followup.send("⚠️ Couldn't fetch live data right now — try again in a minute.")
         return
 
-    lines = [f"**{summary['team_name']}** - {summary['overall_points']} pts"]
-    for _, player in squad.iterrows():
+    lines = [f"**{summary['team_name']}** - {summary['overall_points']} pts", "", "**Starting XI:**"]
+    starting = squad[squad["role"] == "Starting XI"]
+    bench = squad[squad["role"] == "Bench"]
+
+    for _, player in starting.iterrows():
         lines.append(f"{player['web_name']} ({player['position']}) - {player['total_points']} pts")
-    await interaction.response.send_message("\n".join(lines))
+
+    lines.append("\n**Bench:**")
+    for _, player in bench.iterrows():
+        lines.append(f"{player['web_name']} ({player['position']}) - {player['total_points']} pts")
+
+    flagged = flag_injuries(squad)
+    if not flagged.empty:
+        lines.append("\n**⚠️ Injury/Availability Concerns:**")
+        for _, player in flagged.iterrows():
+            chance = player["chance_of_playing_next_round"]
+            chance_str = f"{int(chance)}% chance to play" if pd.notna(chance) else "status unclear"
+            lines.append(f"{player['web_name']}: {player['news']} ({chance_str})")
+
+    await interaction.followup.send("\n".join(lines))
 
 from analysis.transfer_engine import suggest_transfers, suggest_captain
-from api.data_fetcher import get_players_dataframe, get_fixtures
+
 
 @tree.command(name="transfers", description="Get transfer suggestions")
 async def transfers_command(interaction: discord.Interaction, team_id: Optional[int] = None):
@@ -100,7 +119,7 @@ async def transfers_command(interaction: discord.Interaction, team_id: Optional[
         return
 
     gameweek = get_current_gameweek()
-    status, player_ids = get_squad_player_ids(team_id, gameweek)
+    status, player_ids, bank = get_squad_player_ids(team_id, gameweek)
 
     if status == "invalid_team_id":
         await interaction.followup.send(
@@ -132,7 +151,7 @@ async def transfers_command(interaction: discord.Interaction, team_id: Optional[
     try:
         squad = build_squad_from_ids(player_ids)
         all_players = get_players_dataframe()
-        suggestions = suggest_transfers(squad, all_players, player_ids, gameweek, bank=0.5)
+        suggestions = suggest_transfers(squad, all_players, player_ids, gameweek, bank=bank)
     except Exception as e:
         print(f"[transfers_command] error: {e}")
         await interaction.followup.send("⚠️ Couldn't fetch live data right now — try again in a minute.")
@@ -140,7 +159,15 @@ async def transfers_command(interaction: discord.Interaction, team_id: Optional[
 
     lines = ["**Transfer Suggestions:**"]
     for _,row in suggestions.iterrows():
-        lines.append(f"OUT: {row['sell']} -> IN: {row['buy']}")
+        lines.append(f"OUT: {row['sell']} ({row['reason']}) -> IN: {row['buy']}")
+
+    flagged = flag_injuries(squad)
+    if not flagged.empty:
+        lines.append("\n**⚠️ Current squad injury/availability concerns:**")
+        for _, player in flagged.iterrows():
+            chance = player["chance_of_playing_next_round"]
+            chance_str = f"{int(chance)}% chance to play" if pd.notna(chance) else "status unclear"
+            lines.append(f"{player['web_name']}: {player['news']} ({chance_str})")
 
     await interaction.followup.send("\n".join(lines))
 
@@ -155,7 +182,7 @@ async def captain_command(interaction: discord.Interaction, team_id: Optional[in
         return
 
     gameweek = get_current_gameweek()
-    status, player_ids = get_squad_player_ids(team_id, gameweek)
+    status, player_ids, bank = get_squad_player_ids(team_id, gameweek)
 
     if status == "invalid_team_id":
         await interaction.followup.send(

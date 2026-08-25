@@ -40,8 +40,13 @@ def add_scores(players_df, live_features):
     return players_df
 
 def find_weak_links(squad_df, n=3):
-    """Returns the n lowest-scoring players in your squad — transfer-out candidates."""
-    return squad_df.sort_values("score").head(n)
+    """Returns transfer-out candidates: injured/doubtful players first, then the lowest-scoring healthy players filling any remaining slots."""
+    injured = squad_df[squad_df["status"] != "a"]
+    healthy = squad_df[squad_df["status"] == "a"].sort_values("score")
+
+    remaining_slots = max(n - len(injured), 0)
+    weaklinks = pd.concat([injured, healthy.head(remaining_slots)])
+    return weaklinks.head(n)
 
 def find_best_replacement(player_to_replace, all_players_df, squad_ids, budget):
     """
@@ -63,7 +68,7 @@ def find_best_replacement(player_to_replace, all_players_df, squad_ids, budget):
     best = candidates.sort_values("score", ascending=False).iloc[0]
     return best
 
-def suggest_transfers(squad_df, all_players_df, squad_ids, gameweek, bank=0.0, n=3):
+def suggest_transfers(squad_df, all_players_df, squad_ids, gameweek, bank, n=3):
     """Suggests n transfers: who to sell and who to buy instead."""
     live_features = build_live_features(gameweek, HISTORICAL_ROLLING_AVERAGES)
     scored_squad = add_scores(squad_df, live_features)      
@@ -71,14 +76,31 @@ def suggest_transfers(squad_df, all_players_df, squad_ids, gameweek, bank=0.0, n
 
     weaklinks = find_weak_links(scored_squad, n=n)
 
+    remaining_budget = bank
+    already_suggested_ids = []
     suggestions = []
+
     for _, player in weaklinks.iterrows():
-        replacement = find_best_replacement(player, scored_all, squad_ids, budget=bank)
+        replacement = find_best_replacement(
+            player, scored_all, squad_ids + already_suggested_ids, budget=remaining_budget
+        )
+
+        if replacement is not None:
+            cost_change = replacement["now_cost"] - player["now_cost"]
+            remaining_budget -= cost_change
+            already_suggested_ids.append(replacement["id"])
+
+        reason = "Injured/Doubtful" if player["status"] != "a" else "Low score"
+
         suggestions.append({
-            "sell" : player["web_name"],
-            "sell_score" : player["score"],
+            "sell": player["web_name"],
+            "sell_price": player["now_cost"],
+            "sell_score": player["score"],
+            "reason": reason,
             "buy": replacement["web_name"] if replacement is not None else "No suitable replacement found",
+            "buy_price": replacement["now_cost"] if replacement is not None else None,
             "buy_score": replacement["score"] if replacement is not None else None,
+            "remaining_budget": round(remaining_budget, 1),
         })
 
     return pd.DataFrame(suggestions)

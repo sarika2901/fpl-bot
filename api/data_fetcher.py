@@ -13,7 +13,7 @@ def fetch_raw_data():
 
 CACHE_FILE = "players_cache.csv"
 
-def get_players_dataframe(force_refresh=False):
+def get_players_dataframe(force_refresh=True):
     """Returns all players as a clean pandas df"""
     if not force_refresh and os.path.exists(CACHE_FILE):
         print("Loading players from cache...")
@@ -73,11 +73,12 @@ def get_current_gameweek():
 
 if __name__ == "__main__":
     df = get_players_dataframe()
-    # print(df[["web_name", "total_points", "position", "now_cost", "form"]].head(10))
-    # mf_df = df[df["element_type"] == 3]
-    # mf_df["ppm"] = mf_df["total_points"]/ mf_df["now_cost"]
-    # mf_df = mf_df.sort_values("ppm", ascending=False)
-    # print(mf_df[["web_name", "position", "total_points", "now_cost", "ppm"]].head(10))
+    print(df[["web_name", "total_points", "position", "now_cost", "form"]].head(10))
+    mf_df = df[df["element_type"] == 3]
+    mf_df["ppm"] = mf_df["total_points"]/ mf_df["now_cost"]
+    mf_df = mf_df.sort_values("ppm", ascending=False)
+    print(mf_df[["web_name", "position", "total_points", "now_cost", "ppm"]].head(10))
+    print(get_manager_info(2093872))
 
     print(df.groupby("position")["total_points"].mean())
 
