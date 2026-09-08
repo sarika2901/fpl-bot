@@ -5,4 +5,5 @@ players_cache.csv
 .env
 bot/user_teams.json
 data
+tests
 models

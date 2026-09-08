@@ -8,7 +8,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import requests
 import pandas as pd
-from api.data_fetcher import get_players_dataframe, get_manager_info, get_manager_picks, get_fixtures
+from api.data_fetcher import (
+    get_players_dataframe, get_manager_info, get_manager_picks,
+    get_fixtures, get_manager_history,
+)
 
 
 def load_mock_squad():
@@ -16,31 +19,85 @@ def load_mock_squad():
         data = json.load(f)
     return data["player_ids"]
 
+def get_free_transfers(team_id, gameweek):
+    """
+    Estimates free transfers available ENTERING `gameweek`, simulating FPL's
+    banking rule (starts at 1 for GW2, max stack of 2, chips don't consume
+    or reset the count). Returns None if it can't be computed (gameweek <= 1,
+    or manager has no history yet).
+    """
+    if gameweek <= 1:
+        return None
+
+    history = get_manager_history(team_id)
+    if history is None:
+        return None
+
+    by_event = {row["event"]: row for row in history["current"]}
+    chip_events = {
+        chip["event"] for chip in history.get("chips", [])
+        if chip["name"] in ("wildcard", "freehit")
+    }
+
+    free_transfers = 1
+    for gw in range(2, gameweek):
+        row = by_event.get(gw)
+        if row is None:
+            break
+        if gw not in chip_events:
+            free_transfers = max(free_transfers - row.get("event_transfers", 0), 0)
+        free_transfers = min(free_transfers + 1, 2)
+
+    return free_transfers
+
+GW19_DEADLINE = 19
+
+def get_chip_status(team_id, current_gw):
+    """
+    Returns a dict {"wildcard": "available"/"used"/"unknown", "freehit": ...,
+    "bboost": ..., "3xc": ...} for the CURRENT half of the season.
+    FPL gives two full sets of chips (2025/26+): one usable GW1/2 through the
+    GW19 deadline, a fresh set from GW20 onward. Unused first-half chips
+    expire — they do not carry into the second half, so this only ever
+    reports status for whichever half `current_gw` falls into.
+    """
+    chip_types = ["wildcard", "freehit", "bboost", "3xc"]
+    history = get_manager_history(team_id)
+    if history is None:
+        return {c: "unknown" for c in chip_types}
+
+    half_start, half_end = (1, GW19_DEADLINE) if current_gw <= GW19_DEADLINE else (GW19_DEADLINE + 1, 38)
+
+    played_this_half = {
+        chip["name"] for chip in history.get("chips", [])
+        if half_start <= chip["event"] <= half_end
+    }
+    return {c: ("used" if c in played_this_half else "available") for c in chip_types}
+
 def get_squad_player_ids(team_id, gameweek):
     """
-    Returns (status, player_ids) where status is one of:
-      "ok"                - picks retrieved successfully
-      "invalid_team_id"   - team_id doesn't exist on FPL
-      "season_not_started"- team exists but hasn't entered any gameweek yet
-      "picks_unavailable"  - team has entered events, but this gameweek's picks aren't ready
+    Returns (status, player_ids, bank, active_chip).
+    status: "ok" | "invalid_team_id" | "season_not_started" | "picks_unavailable"
+    active_chip: None, "wildcard", "freehit", "bboost", or "3xc" (only set when status == "ok")
     """
     info = get_manager_info(team_id)
 
     if info is None:
-        return "invalid_team_id", None, None  # Team ID is invalid
+        return "invalid_team_id", None, None, None  # Team ID is invalid
 
     if len(info["entered_events"]) == 0:
         # print("⚠️  Season hasn't started for this team yet — using mock squad instead.")
         # return load_mock_squad()
-        return "season_not_started", None, None
+        return "season_not_started", None, None, None
 
     try:
         picks_data = get_manager_picks(team_id, gameweek)
         player_ids = [p["element"] for p in picks_data["picks"]]
         bank = picks_data["entry_history"]["bank"]/10
-        return "ok", player_ids, bank
+        active_chip = picks_data.get("active_chip")
+        return "ok", player_ids, bank, active_chip
     except requests.exceptions.HTTPError:
-        return "picks_unavailable", None, None
+        return "picks_unavailable", None, None, None
 
 def build_squad_from_ids(player_ids):
     """Given a list of player IDs, return their full stats as a DataFrame."""
@@ -157,7 +214,7 @@ if __name__ == "__main__":
     print("\n--- Team Summary ---")
     print(summary)
 
-    status, player_ids, bank = get_squad_player_ids(MY_TEAM_ID, GAMEWEEK)
+    status, player_ids, bank, active_chip = get_squad_player_ids(MY_TEAM_ID, GAMEWEEK)
     if status != "ok":
         print(f"Squad unavailable: {status}")
     else:
@@ -165,6 +222,7 @@ if __name__ == "__main__":
         print("\n--- Your Squad ---")
         print(squad)
         print(f"Bank: £{bank}m")
+        print(f"Active Chip: {active_chip}")
 
         print("\n--- Injury Check ---")
         flag_injuries(squad)

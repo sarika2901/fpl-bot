@@ -1,7 +1,7 @@
 import requests
 import pandas as pd
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 BASE_URL = "https://fantasy.premierleague.com/api/bootstrap-static/"
 
@@ -13,7 +13,7 @@ def fetch_raw_data():
 
 CACHE_FILE = "players_cache.csv"
 
-def get_players_dataframe(force_refresh=True):
+def get_players_dataframe(force_refresh=False):
     """Returns all players as a clean pandas df"""
     if not force_refresh and os.path.exists(CACHE_FILE):
         print("Loading players from cache...")
@@ -48,11 +48,27 @@ def get_manager_picks(team_id, gameweek):
     response.raise_for_status()
     return response.json()
 
+def get_manager_history(team_id):
+     """Full-season history for a manager: per-GW transfers/points/bank/value,
+    plus which chips were played and when. Needed to reconstruct free transfers."""
+     url = f"https://fantasy.premierleague.com/api/entry/{team_id}/history/"
+     response = requests.get(url)
+     if response.status_code == 404:
+         return None
+     response.raise_for_status()
+     return response.json()
+   
+
 def get_fixtures():
     url = "https://fantasy.premierleague.com/api/fixtures/"
     response = requests.get(url)
     response.raise_for_status()
     return pd.DataFrame(response.json())
+
+def get_events():
+    """Raw list of gameweek/event dicts from bootstrap-static (deadlines, flags)."""
+    return fetch_raw_data()["events"]
+
 
 def get_current_gameweek():
     """Returns the id of the currently active gameweek, or the next upcoming one."""
@@ -69,6 +85,31 @@ def get_current_gameweek():
 
     return 1
 
+def get_planning_gameweek():
+     """The gameweek transfer/captain SUGGESTIONS should target — the next
+    gameweek whose deadline hasn't passed yet. This is almost always
+    different from get_current_gameweek() once a GW kicks off, since you
+    can't act on a locked gameweek anymore."""
+     events = get_events()
+     upcoming = [e for e in events if e["is_next"]]
+     if upcoming:
+         return upcoming[0]["id"]
+     current = [e for e in events if e["is_current"]]
+     return current[0]["id"] if current else 1
+
+def get_gameweek_deadline(gameweek):
+    events = get_events()
+    match = next((e for e in events if e["id"] == gameweek), None)
+    if not match:
+        return None
+    return datetime.strptime(match["deadline_time"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+def is_deadline_passed(gameweek):
+    deadline = get_gameweek_deadline(gameweek)
+    if deadline is None:
+        return None
+    return datetime.now(timezone.utc) > deadline
+
 
 
 if __name__ == "__main__":
@@ -79,6 +120,8 @@ if __name__ == "__main__":
     mf_df = mf_df.sort_values("ppm", ascending=False)
     print(mf_df[["web_name", "position", "total_points", "now_cost", "ppm"]].head(10))
     print(get_manager_info(2093872))
-
+    print(get_manager_history(2093872))
+    print(get_planning_gameweek())
     print(df.groupby("position")["total_points"].mean())
-
+    print(get_gameweek_deadline(1))
+    print(is_deadline_passed(1))
