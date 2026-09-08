@@ -107,6 +107,13 @@ def suggest_transfers(squad_df, all_players_df, squad_ids, gameweek, bank,
     return pd.DataFrame(suggestions)
 
 def suggest_captain(squad_df, fixtures_df, gameweek):
+    """
+    Suggests both captain AND vice-captain: the top two players by
+    captain_score. This matters because if your captain gets 0 minutes,
+    FPL automatically hands the armband to your vice-captain — so the VC
+    pick uses the exact same eligibility/scoring logic as captain, not a
+    weaker fallback.
+    """
     live_features = build_live_features(gameweek, HISTORICAL_ROLLING_AVERAGES)
     scored_squad = add_scores(squad_df, live_features).copy()
 
@@ -120,7 +127,13 @@ def suggest_captain(squad_df, fixtures_df, gameweek):
         lambda team_id: 6 - (get_upcoming_difficulty(team_id, fixtures_df, next_n=1) or 3)
     )
     eligible["captain_score"] = eligible["score"] + (0.5 * eligible["fixture_ease"])
-    return eligible.sort_values("captain_score", ascending=False).iloc[0]
+
+    ranked = eligible.sort_values("captain_score", ascending=False)
+
+    captain = ranked.iloc[0]
+    vice_captain = ranked.iloc[1] if len(ranked) > 1 else None
+
+    return captain, vice_captain
 
 if __name__ == "__main__":
     from api.data_fetcher import get_players_dataframe, get_fixtures
@@ -143,11 +156,12 @@ if __name__ == "__main__":
     transfers = suggest_transfers(squad, all_players, player_ids, GAMEWEEK, bank=bank, n=3)
     print(transfers)
 
-    print("\n--- Captain Suggestion ---")
+    print("\n--- Captain / Vice-Captain Suggestion ---")
     fixtures_df = get_fixtures()
-    captain = suggest_captain(squad, fixtures_df, GAMEWEEK)
-    print(f"Captain pick: {captain['web_name']} (score: {captain['captain_score']:.2f})")
-    
+    captain, vice_captain = suggest_captain(squad, fixtures_df, planning_gw)
+    print(f"Captain: {captain['web_name']} (score: {captain['captain_score']:.2f})")
+    if vice_captain is not None:
+        print(f"Vice-captain: {vice_captain['web_name']} (score: {vice_captain['captain_score']:.2f})")
 
 
 
