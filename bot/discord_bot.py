@@ -242,14 +242,15 @@ async def captain_command(interaction: discord.Interaction, team_id: Optional[in
     try:
         squad = build_squad_from_ids(player_ids)
         fixtures_df = get_fixtures()
-        captain = suggest_captain(squad, fixtures_df, planning_gw)
+        captain, vice_captain = suggest_captain(squad, fixtures_df, planning_gw)
     except Exception as e:
         print(f"[captain_command] error: {e}")
         await interaction.followup.send("⚠️ Couldn't fetch live data right now — try again in a minute.")
         return
 
     prefix = CHIP_LABELS.get(active_chip, "") + "\n" if active_chip in CHIP_LABELS else ""
-    await interaction.followup.send(f"{prefix}Captain pick for GW{planning_gw}: **{captain['web_name']}**")
+    vc_line = f"\nVice-captain: **{vice_captain['web_name']}**" if vice_captain is not None else ""
+    await interaction.followup.send(f"{prefix}Captain pick for GW{planning_gw}: **{captain['web_name']}**{vc_line}")
 
 
 
