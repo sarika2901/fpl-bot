@@ -1,25 +1,34 @@
-import json
 import os
+import psycopg2
 
-REGISTRY_FILE = "bot/user_teams.json"
-
-def load_registry():
-    if not os.path.exists(REGISTRY_FILE):
-        return {}
-    with open(REGISTRY_FILE) as f:
-        return json.load(f)
-
-def save_registry(registry):
-    with open(REGISTRY_FILE, "w") as f:
-        json.dump(registry,f)
+def get_connection():
+    return psycopg2.connect(
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT"),
+        dbname=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+    )
 
 def register_user(discord_user_id, team_id):
-    registry = load_registry()
-    registry[str(discord_user_id)] = team_id
-    save_registry(registry)
+    """Registers or updates a user's FPL team ID directly in Postgres."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO user_teams (discord_id, team_id)
+        VALUES (%s, %s)
+        ON CONFLICT (discord_id) DO UPDATE SET team_id = EXCLUDED.team_id
+    """, (discord_user_id, team_id))
+    conn.commit()
+    cur.close()
+    conn.close()
 
 def get_registered_team(discord_user_id):
-    registry = load_registry()
-    return registry.get(str(discord_user_id))
-
-
+    """Returns the registered team_id for a discord_user_id, or None if not registered."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT team_id FROM user_teams WHERE discord_id = %s", (discord_user_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row[0] if row else None
