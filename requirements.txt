@@ -19,3 +19,9 @@ six==1.17.0
 tzdata==2026.3
 urllib3==2.7.0
 yarl==1.24.5
+discord.py
+pandas
+requests
+python-dotenv
+psycopg2-binary
+scikit-learn
