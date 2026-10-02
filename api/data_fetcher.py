@@ -65,6 +65,14 @@ def get_fixtures():
     response.raise_for_status()
     return pd.DataFrame(response.json())
 
+def get_teams():
+    """Returns the full list of Premier League team IDs (all 20, every gameweek,
+    regardless of who's playing). Needed to detect blank gameweeks — a team with
+    a blank GW won't appear in get_fixtures() at all for that week, so we need
+    the complete roster of team IDs to notice who's missing."""
+    data = fetch_raw_data()
+    return [team["id"] for team in data["teams"]]
+
 def get_events():
     """Raw list of gameweek/event dicts from bootstrap-static (deadlines, flags)."""
     return fetch_raw_data()["events"]

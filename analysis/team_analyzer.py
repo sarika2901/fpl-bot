@@ -9,8 +9,8 @@ if str(PROJECT_ROOT) not in sys.path:
 import requests
 import pandas as pd
 from api.data_fetcher import (
-    get_players_dataframe, get_manager_info, get_manager_picks,
-    get_fixtures, get_manager_history,
+    get_current_gameweek, get_players_dataframe, get_manager_info, get_manager_picks,
+    get_fixtures, get_manager_history, get_teams, get_planning_gameweek
 )
 
 
@@ -206,9 +206,50 @@ def get_upcoming_difficulty(team_id_in_fpl, fixtures_df, next_n=3):
 
     return sum(difficulties) / len(difficulties) if difficulties else None
 
+def get_fixtures_counts(fixtures_df, gameweek, all_team_ids):
+    """
+    Returns {team_id: fixture_count} for every PL team in the given gameweek.
+    0 = blank gameweek (team not playing), 1 = normal, 2+ = double gameweek.
+    `all_team_ids` should come from api.data_fetcher.get_teams() — this is
+    what lets us register a 0 for teams that simply don't appear in
+    fixtures_df at all for this GW.
+    """
+    counts = {team_id: 0 for team_id in all_team_ids}
+
+    gw_fixtures = fixtures_df[fixtures_df["event"] == gameweek]
+    for _, fixture in gw_fixtures.iterrows():
+        counts[fixture["team_h"]] = counts.get(fixture["team_h"], 0) + 1
+        counts[fixture["team_a"]] = counts.get(fixture["team_a"], 0) + 1
+
+    return counts
+
+def classify_squad_fixture_impact(squad_df, fixture_counts):
+    """
+    Given a squad and a {team_id: fixture_count} dict (from get_fixture_counts),
+    returns how many squad players are blank (0 fixtures) or double (2+) this GW,
+    plus their names. This is your squad 15 specifically, not the whole league.
+    """
+    squad_df = squad_df.copy()
+    squad_df["fixture_count"] = squad_df["team"].map(fixture_counts).fillna(0).astype(int)
+
+    blanks = squad_df[squad_df["fixture_count"] == 0]
+    doubles = squad_df[squad_df["fixture_count"] >= 2]
+
+    return {
+        "blank_count": len(blanks),
+        "blank_players": blanks["web_name"].tolist(),
+        "double_count": len(doubles),
+        "double_players": doubles["web_name"].tolist(),
+    }
+
+
+
+
 if __name__ == "__main__":
     MY_TEAM_ID = 2093872
-    GAMEWEEK = 1
+    GAMEWEEK = get_current_gameweek()  # or set to a specific GW number
+    PLANNING_GW = get_planning_gameweek()  # the GW for which you want to plan transfers
+
 
     summary = get_team_summary(MY_TEAM_ID)
     print("\n--- Team Summary ---")
@@ -235,4 +276,14 @@ if __name__ == "__main__":
         for _, player in squad.iterrows():
             difficulty = get_upcoming_difficulty(player["team"], fixtures_df)
             print(f"{player['web_name']} : avg difficulty = {difficulty}")
+        
+        print("\n--- Fixture Counts (Blank/Double GW check) ---")
+        all_team_ids = get_teams()
+        fixture_counts = get_fixtures_counts(fixtures_df, PLANNING_GW, all_team_ids)
+        print(f"Fixture counts for GW{PLANNING_GW}:")
+        print(fixture_counts)
+
+        impact = classify_squad_fixture_impact(squad, fixture_counts)
+        print(f"\nBlank players: {impact['blank_players']}")
+        print(f"Double players: {impact['double_players']}")
 
