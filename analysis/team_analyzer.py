@@ -242,6 +242,30 @@ def classify_squad_fixture_impact(squad_df, fixture_counts):
         "double_players": doubles["web_name"].tolist(),
     }
 
+def get_fixture_outlook_message(squad_df, fixtures_df, gameweek, all_team_ids):
+    """
+    Builds a human-readable heads-up about blank/double gameweeks affecting
+    this squad for `gameweek`. Returns None if nothing notable (normal week,
+    every squad player has exactly 1 fixture) — callers should skip showing
+    anything in that case rather than printing an empty/reassuring message
+    every single week, which would get ignored as noise.
+    """
+    fixture_counts = get_fixtures_counts(fixtures_df, gameweek, all_team_ids)
+    impact = classify_squad_fixture_impact(squad_df, fixture_counts)
+
+    lines = []
+    if impact["blank_count"] > 0:
+        lines.append(
+            f"🚫 **Blank GW{gameweek} alert:** {impact['blank_count']} of your players have "
+            f"no fixture this week ({', '.join(impact['blank_players'])})."
+        )
+    if impact["double_count"] > 0:
+        lines.append(
+            f"⚡ **Double GW{gameweek} alert:** {impact['double_count']} of your players play "
+            f"twice this week ({', '.join(impact['double_players'])})."
+        )
+
+    return "\n".join(lines) if lines else None
 
 
 
@@ -286,4 +310,6 @@ if __name__ == "__main__":
         impact = classify_squad_fixture_impact(squad, fixture_counts)
         print(f"\nBlank players: {impact['blank_players']}")
         print(f"Double players: {impact['double_players']}")
-
+        print("\n--- Fixture Outlook Message ---")
+        outlook = get_fixture_outlook_message(squad, fixtures_df, PLANNING_GW, all_team_ids)
+        print(outlook if outlook else "(nothing notable — normal gameweek)")

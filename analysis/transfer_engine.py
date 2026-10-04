@@ -24,6 +24,33 @@ def find_weak_links(squad_df, n=3):
     weaklinks = pd.concat([injured, healthy.head(remaining_slots)])
     return weaklinks.head(n)
 
+def get_squad_concerns(scored_squad, bottom_percentile=0.35):
+    """
+    Returns a DataFrame of every squad concern — injured/doubtful/suspended
+    players, plus healthy players in the bottom `bottom_percentile` of this
+    squad's own score range — sorted worst-first (injured before low-scorers,
+    then by ascending score within each group).
+
+    This is now the SINGLE source of truth for "which players need
+    attention" — both the concern count/names shown in the Wildcard nudge,
+    and the transfer suggestions table, are built from this same list, so
+    the two numbers can never silently disagree again.
+    """
+    injured = scored_squad[scored_squad["status"] != "a"]
+    healthy = scored_squad[(scored_squad["status"] == "a") & (scored_squad["score"] != -999)]
+
+    if len(healthy) > 0:
+        cutoff = healthy["score"].quantile(bottom_percentile)
+        weak = healthy[healthy["score"] <= cutoff]
+    else:
+        weak = healthy
+
+    concerns = pd.concat([injured, weak]).drop_duplicates(subset="id").copy()
+    concerns["is_injured"] = concerns["status"] != "a"
+    concerns = concerns.sort_values(["is_injured", "score"], ascending=[False, True])
+    return concerns.drop(columns="is_injured")
+
+
 def find_best_replacement(player_to_replace, all_players_df, squad_ids, budget):
     position = player_to_replace["position"]
     max_price = player_to_replace["now_cost"] + budget
@@ -41,29 +68,26 @@ def find_best_replacement(player_to_replace, all_players_df, squad_ids, budget):
     return candidates.sort_values("score", ascending=False).iloc[0]
 
 def suggest_transfers(squad_df, all_players_df, squad_ids, gameweek, bank,
-                       free_transfers=None, active_chip=None, n=3, hit_threshold=4.0):
+                       free_transfers=None, active_chip=None, hit_threshold=4.0):
     """
-    Suggests up to n transfers, respecting FPL's transfer economy:
-      - If Wildcard/Free Hit is active this GW, every transfer is free — labeled accordingly.
-      - Otherwise, the first `free_transfers` suggestions are free; anything
-        beyond that costs -4 and is only kept if the projected score gain
-        clears `hit_threshold` (default 4.0, since the model's MAE (~2 pts)
-        puts its output roughly on the same scale as actual points).
-      - If free_transfers is None (couldn't be determined), every suggestion
-        is labeled "cost unknown" rather than silently assuming it's free.
+    Evaluates a transfer for EVERY squad concern (not an arbitrary top-3
+    subset) — so the concern count and the number of suggestions shown
+    always match. Each concern gets a labeled suggestion: Free, a hit
+    that's worth it, or explicitly "not worth it" with the point swing
+    shown, rather than being silently dropped.
     """
     live_features = build_live_features(gameweek, HISTORICAL_ROLLING_AVERAGES)
     scored_squad = add_scores(squad_df, live_features)
     scored_all = add_scores(all_players_df, live_features)
 
-    weaklinks = find_weak_links(scored_squad, n=n)
+    concerns = get_squad_concerns(scored_squad)
     chip_makes_transfers_free = active_chip in ("wildcard", "freehit")
 
     remaining_budget = bank
     already_suggested_ids = []
     suggestions = []
 
-    for i, (_, player) in enumerate(weaklinks.iterrows()):
+    for i, (_, player) in enumerate(concerns.iterrows()):
         replacement = find_best_replacement(
             player, scored_all, squad_ids + already_suggested_ids, budget=remaining_budget
         )
@@ -80,6 +104,7 @@ def suggest_transfers(squad_df, all_players_df, squad_ids, gameweek, bank,
             continue
 
         net_gain = replacement["score"] - player["score"]
+        already_suggested_ids.append(replacement["id"])  # never suggest the same replacement twice
 
         if chip_makes_transfers_free:
             cost_label = "Free (chip active)"
@@ -90,11 +115,15 @@ def suggest_transfers(squad_df, all_players_df, squad_ids, gameweek, bank,
         elif net_gain > hit_threshold:
             cost_label = "-4 (hit) — worth it"
         else:
-            continue  # not worth a -4 hit, drop this suggestion entirely
+            cost_label = f"-4 (hit) — not worth it (+{net_gain:.1f} pts only)"
 
-        cost_change = replacement["now_cost"] - player["now_cost"]
-        remaining_budget -= cost_change
-        already_suggested_ids.append(replacement["id"])
+        # Only reserve budget for moves we're actually recommending —
+        # a "not worth it" suggestion is shown for transparency but the
+        # user isn't expected to act on it, so it shouldn't eat into the
+        # budget calculation for the concerns evaluated after it.
+        if cost_label != f"-4 (hit) — not worth it (+{net_gain:.1f} pts only)":
+            cost_change = replacement["now_cost"] - player["now_cost"]
+            remaining_budget -= cost_change
 
         suggestions.append({
             "sell": player["web_name"], "sell_price": player["now_cost"],
@@ -104,7 +133,10 @@ def suggest_transfers(squad_df, all_players_df, squad_ids, gameweek, bank,
             "remaining_budget": round(remaining_budget, 1),
         })
 
-    return pd.DataFrame(suggestions)
+    concern_count = len(concerns)
+    concern_players = concerns["web_name"].tolist()
+
+    return pd.DataFrame(suggestions), concern_count, concern_players
 
 def suggest_captain(squad_df, fixtures_df, gameweek):
     """
@@ -136,25 +168,34 @@ def suggest_captain(squad_df, fixtures_df, gameweek):
     return captain, vice_captain
 
 if __name__ == "__main__":
-    from api.data_fetcher import get_players_dataframe, get_fixtures
-    from analysis.team_analyzer import get_squad_player_ids, build_squad_from_ids
+    from api.data_fetcher import get_players_dataframe, get_fixtures, get_current_gameweek, get_planning_gameweek
+    from analysis.team_analyzer import get_squad_player_ids, build_squad_from_ids, get_free_transfers
 
     MY_TEAM_ID = 2093872
-    GAMEWEEK = 1
-    BANK = 0.5 
+    GAMEWEEK = get_current_gameweek()       # for fetching the actual locked squad
+    planning_gw = get_planning_gameweek()   # the GW to plan transfers/captain for
+    BANK = 0.5
 
     status, player_ids, bank, active_chip = get_squad_player_ids(MY_TEAM_ID, GAMEWEEK)
     if status != "ok":
         print(f"⚠️  Squad unavailable ({status}) — using mock squad from config/my_squad.json")
         player_ids = load_mock_squad()
-        bank = BANK  # mock squad has no live bank value, fall back to manual constant
+        bank = BANK
+        active_chip = None
+
+    free_transfers = get_free_transfers(MY_TEAM_ID, planning_gw)
 
     squad = build_squad_from_ids(player_ids)
     all_players = get_players_dataframe()
 
     print("\n--- Transfer Suggestions ---")
-    transfers = suggest_transfers(squad, all_players, player_ids, GAMEWEEK, bank=bank, n=3)
+    transfers, concern_count, concern_players = suggest_transfers(
+        squad, all_players, player_ids, planning_gw, bank=bank,
+        free_transfers=free_transfers, active_chip=active_chip, n=3
+    )
     print(transfers)
+    print(f"\nSquad concern count: {concern_count}")
+    print(f"Concerning players: {concern_players}")
 
     print("\n--- Captain / Vice-Captain Suggestion ---")
     fixtures_df = get_fixtures()
@@ -162,7 +203,6 @@ if __name__ == "__main__":
     print(f"Captain: {captain['web_name']} (score: {captain['captain_score']:.2f})")
     if vice_captain is not None:
         print(f"Vice-captain: {vice_captain['web_name']} (score: {vice_captain['captain_score']:.2f})")
-
 
 
 

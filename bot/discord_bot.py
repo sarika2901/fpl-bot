@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from api.data_fetcher import (
     get_current_gameweek, get_planning_gameweek, is_deadline_passed,
-    get_players_dataframe, get_fixtures,
+    get_players_dataframe, get_fixtures, get_teams
 )
 from analysis.transfer_engine import suggest_transfers, suggest_captain
 from bot.user_registry import get_registered_team, register_user
@@ -34,7 +34,7 @@ async def on_ready():
 
 from analysis.team_analyzer import (
     get_team_summary, get_squad_player_ids, build_squad_from_ids,
-    load_mock_squad, flag_injuries, suggest_starting_xi, get_free_transfers, get_chip_status,
+    load_mock_squad, flag_injuries, suggest_starting_xi, get_free_transfers, get_chip_status, get_fixture_outlook_message
 )
 # MY_TEAM_ID = int(os.getenv("MY_TEAM_ID"))
 GAMEWEEK = get_current_gameweek()
@@ -125,6 +125,12 @@ async def team_command(interaction: discord.Interaction, team_id: Optional[int] 
         readable = ", ".join(chip_names[c] for c in available_chips)
         lines.append(f"🃏 _Chips available this half: {readable}_")
 
+    planning_gw = get_planning_gameweek()
+    all_team_ids = get_teams()
+    fixture_outlook = get_fixture_outlook_message(squad, fixtures_df, planning_gw, all_team_ids)
+    if fixture_outlook:
+        lines.append(fixture_outlook)
+
     lines += ["", "**Starting XI:**"]
     starting = squad[squad["role"] == "Starting XI"]
     bench = squad[squad["role"] == "Bench"]
@@ -179,7 +185,7 @@ async def transfers_command(interaction: discord.Interaction, team_id: Optional[
     try:
         squad = build_squad_from_ids(player_ids)
         all_players = get_players_dataframe()
-        suggestions = suggest_transfers(
+        suggestions, concern_count, concern_players = suggest_transfers(
             squad, all_players, player_ids, planning_gw, bank=bank,
             free_transfers=free_transfers, active_chip=active_chip,
         )
@@ -196,14 +202,23 @@ async def transfers_command(interaction: discord.Interaction, team_id: Optional[
         lines.insert(0, CHIP_LABELS[active_chip] + "\n")
     if free_transfers is not None and not (active_chip in ("wildcard", "freehit")):
         lines.append(f"_You have {free_transfers} free transfer{'s' if free_transfers != 1 else ''} banked._\n")
-    if wildcard_available and active_chip is None and len(suggestions) >=2:
-        lines.append("💡 _You still have a Wildcard available this half. If your squad needs "
-                      "several changes, a Wildcard (unlimited free transfers, all at once) may "
-                      "be more efficient than taking -4 hits one at a time._\n")
+    WILDCARD_CONCERN_THRESHOLD = 4
+
+    if wildcard_available and active_chip is None and concern_count >= WILDCARD_CONCERN_THRESHOLD:
+        if len(concern_players) > 4:
+            shown_names = ", ".join(concern_players[:4]) + f", and {len(concern_players) - 4} more"
+        else:
+            shown_names = ", ".join(concern_players)
+
+        lines.append(f"💡 _{concern_count} of your 15 players are injured, doubtful, or "
+                      f"underperforming ({shown_names}). "
+                      f"You still have a Wildcard available this half — unlimited free transfers "
+                      f"in one go may be more efficient than several -4 hits._\n")
 
     for _, row in suggestions.iterrows():
         cost_str = f" [{row['cost']}]" if row.get("cost") else ""
-        lines.append(f"OUT: {row['sell']} ({row['reason']}) -> IN: {row['buy']}{cost_str}")
+        prefix = "⏭️ " if row.get("cost", "").startswith("-4 (hit) — not worth it") else ""
+        lines.append(f"{prefix}OUT: {row['sell']} ({row['reason']}) -> IN: {row['buy']}{cost_str}")
 
     flagged = flag_injuries(squad)
     if not flagged.empty:
