@@ -267,7 +267,65 @@ def get_fixture_outlook_message(squad_df, fixtures_df, gameweek, all_team_ids):
 
     return "\n".join(lines) if lines else None
 
+BENCH_BOOST_DOUBLE_THRESHOLD = 6
 
+def suggest_bench_boost(squad_df, fixtures_df, gameweek, all_team_ids, chip_status, active_chip,
+                         threshold=BENCH_BOOST_DOUBLE_THRESHOLD):
+    """
+    Returns a suggestion string if Bench Boost is available, not already
+    active this week, and at least `threshold` of the squad's 15 players
+    have a double gameweek. Returns None if no nudge is warranted.
+
+    Why check chip_status/active_chip first: no point computing fixture
+    data if the chip isn't even usable right now — cheap short-circuit.
+    Why threshold=6 (not higher/lower): Bench Boost needs a MEANINGFUL
+    chunk of the squad doubling, not just one or two players, since its
+    whole value proposition is "your bench counts too." 6 of 15 is a
+    reasonable starting bar — tune this once you see it fire on a real
+    double gameweek later in the season.
+    """
+    if chip_status.get("bboost") != "available" or active_chip is not None:
+        return None
+
+    fixture_counts = get_fixtures_counts(fixtures_df, gameweek, all_team_ids)
+    impact = classify_squad_fixture_impact(squad_df, fixture_counts)
+
+    if impact["double_count"] >= threshold:
+        return (f"🚀 _{impact['double_count']} of your 15 players have a double gameweek in GW{gameweek} "
+                f"({', '.join(impact['double_players'])}). Bench Boost (still available this half) "
+                f"counts your whole squad's points — this could be a strong week to use it._\n")
+    return None
+
+FREE_HIT_BLANK_THRESHOLD = 4
+
+def suggest_free_hit(squad_df, fixtures_df, gameweek, all_team_ids, chip_status, active_chip,
+                      threshold=FREE_HIT_BLANK_THRESHOLD):
+    """
+    Returns a suggestion string if Free Hit is available, not already active
+    this week, and at least `threshold` of the squad's 15 players have a
+    blank gameweek (no fixture at all). Returns None otherwise.
+
+    Why threshold=4, same number as Bench Boost's double-threshold: both are
+    "is this disruption big enough to burn a whole chip on" questions, and 4
+    of 15 (over a quarter of the squad) is a reasonable bar for "this week
+    is genuinely compromised," not just one or two players sitting out.
+
+    Unlike Wildcard, Free Hit is for a ONE-WEEK problem — it reverts next GW
+    automatically — so this check doesn't need to look at player quality
+    (form/injuries) at all, only fixture presence/absence.
+    """
+    if chip_status.get("freehit") != "available" or active_chip is not None:
+        return None
+
+    fixture_counts = get_fixtures_counts(fixtures_df, gameweek, all_team_ids)
+    impact = classify_squad_fixture_impact(squad_df, fixture_counts)
+
+    if impact["blank_count"] >= threshold:
+        return (f"🎯 _{impact['blank_count']} of your 15 players have a blank GW{gameweek} "
+                f"({', '.join(impact['blank_players'])}). Free Hit (still available this half) "
+                f"lets you field a full replacement squad just for this week, reverting "
+                f"automatically afterward — could be worth considering here._\n")
+    return None
 
 if __name__ == "__main__":
     MY_TEAM_ID = 2093872

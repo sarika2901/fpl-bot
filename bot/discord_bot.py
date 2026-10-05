@@ -15,7 +15,7 @@ from api.data_fetcher import (
     get_current_gameweek, get_planning_gameweek, is_deadline_passed,
     get_players_dataframe, get_fixtures, get_teams
 )
-from analysis.transfer_engine import suggest_transfers, suggest_captain
+from analysis.transfer_engine import suggest_transfers, suggest_captain, suggest_triple_captain
 from bot.user_registry import get_registered_team, register_user
 from typing import Optional
 
@@ -34,7 +34,7 @@ async def on_ready():
 
 from analysis.team_analyzer import (
     get_team_summary, get_squad_player_ids, build_squad_from_ids,
-    load_mock_squad, flag_injuries, suggest_starting_xi, get_free_transfers, get_chip_status, get_fixture_outlook_message
+    load_mock_squad, flag_injuries, suggest_starting_xi, get_free_transfers, get_chip_status, get_fixture_outlook_message, suggest_bench_boost, suggest_free_hit
 )
 # MY_TEAM_ID = int(os.getenv("MY_TEAM_ID"))
 GAMEWEEK = get_current_gameweek()
@@ -130,6 +130,9 @@ async def team_command(interaction: discord.Interaction, team_id: Optional[int] 
     fixture_outlook = get_fixture_outlook_message(squad, fixtures_df, planning_gw, all_team_ids)
     if fixture_outlook:
         lines.append(fixture_outlook)
+    bb_suggestion = suggest_bench_boost(squad, fixtures_df, planning_gw, all_team_ids, chip_status, active_chip)
+    if bb_suggestion:
+        lines.append(bb_suggestion)
 
     lines += ["", "**Starting XI:**"]
     starting = squad[squad["role"] == "Starting XI"]
@@ -185,6 +188,8 @@ async def transfers_command(interaction: discord.Interaction, team_id: Optional[
     try:
         squad = build_squad_from_ids(player_ids)
         all_players = get_players_dataframe()
+        fixtures_df = get_fixtures()
+        all_team_ids = get_teams()
         suggestions, concern_count, concern_players = suggest_transfers(
             squad, all_players, player_ids, planning_gw, bank=bank,
             free_transfers=free_transfers, active_chip=active_chip,
@@ -214,10 +219,14 @@ async def transfers_command(interaction: discord.Interaction, team_id: Optional[
                       f"underperforming ({shown_names}). "
                       f"You still have a Wildcard available this half — unlimited free transfers "
                       f"in one go may be more efficient than several -4 hits._\n")
+    fh_suggestion = suggest_free_hit(squad, fixtures_df, planning_gw, all_team_ids, chip_status, active_chip)
+    if fh_suggestion:
+        lines.append(fh_suggestion)
 
     for _, row in suggestions.iterrows():
-        cost_str = f" [{row['cost']}]" if row.get("cost") else ""
-        prefix = "⏭️ " if row.get("cost", "").startswith("-4 (hit) — not worth it") else ""
+        cost = row["cost"] if pd.notna(row["cost"]) else None
+        cost_str = f" [{cost}]" if cost else ""
+        prefix = "⏭️ " if cost and cost.startswith("-4 (hit) — not worth it") else ""
         lines.append(f"{prefix}OUT: {row['sell']} ({row['reason']}) -> IN: {row['buy']}{cost_str}")
 
     flagged = flag_injuries(squad)
@@ -263,7 +272,13 @@ async def captain_command(interaction: discord.Interaction, team_id: Optional[in
         await interaction.followup.send("⚠️ Couldn't fetch live data right now — try again in a minute.")
         return
 
+    chip_status = get_chip_status(team_id, planning_gw)
+    all_team_ids = get_teams()
+    tc_suggestion = suggest_triple_captain(captain, fixtures_df, planning_gw, all_team_ids, chip_status, active_chip)
+
     prefix = CHIP_LABELS.get(active_chip, "") + "\n" if active_chip in CHIP_LABELS else ""
+    if tc_suggestion:
+        prefix += tc_suggestion
     vc_line = f"\nVice-captain: **{vice_captain['web_name']}**" if vice_captain is not None else ""
     await interaction.followup.send(f"{prefix}Captain pick for GW{planning_gw}: **{captain['web_name']}**{vc_line}")
 

@@ -73,8 +73,9 @@ def suggest_transfers(squad_df, all_players_df, squad_ids, gameweek, bank,
     Evaluates a transfer for EVERY squad concern (not an arbitrary top-3
     subset) — so the concern count and the number of suggestions shown
     always match. Each concern gets a labeled suggestion: Free, a hit
-    that's worth it, or explicitly "not worth it" with the point swing
-    shown, rather than being silently dropped.
+    that's worth it, explicitly "not worth it" with the point swing shown,
+    or "no upgrade available" if the best candidate found is actually worse
+    — rather than any of these being silently dropped or mislabeled.
     """
     live_features = build_live_features(gameweek, HISTORICAL_ROLLING_AVERAGES)
     scored_squad = add_scores(squad_df, live_features)
@@ -104,24 +105,41 @@ def suggest_transfers(squad_df, all_players_df, squad_ids, gameweek, bank,
             continue
 
         net_gain = replacement["score"] - player["score"]
+
+        if net_gain < 0:
+            # Best available candidate is actually worse than the player
+            # being sold — don't suggest a downgrade, be honest that
+            # nothing better was found instead.
+            suggestions.append({
+                "sell": player["web_name"], "sell_price": player["now_cost"],
+                "sell_score": player["score"], "reason": reason,
+                "buy": "No upgrade available within budget", "buy_price": None,
+                "buy_score": None, "cost": None,
+                "remaining_budget": round(remaining_budget, 1),
+            })
+            continue
+
         already_suggested_ids.append(replacement["id"])  # never suggest the same replacement twice
+        is_actionable = False
 
         if chip_makes_transfers_free:
             cost_label = "Free (chip active)"
+            is_actionable = True
         elif free_transfers is None:
             cost_label = "Cost unknown"
         elif i < free_transfers:
             cost_label = "Free"
+            is_actionable = True
         elif net_gain > hit_threshold:
             cost_label = "-4 (hit) — worth it"
+            is_actionable = True
         else:
-            cost_label = f"-4 (hit) — not worth it (+{net_gain:.1f} pts only)"
+            cost_label = f"-4 (hit) — not worth it (+{net_gain:.1f} pts)"
 
-        # Only reserve budget for moves we're actually recommending —
-        # a "not worth it" suggestion is shown for transparency but the
-        # user isn't expected to act on it, so it shouldn't eat into the
-        # budget calculation for the concerns evaluated after it.
-        if cost_label != f"-4 (hit) — not worth it (+{net_gain:.1f} pts only)":
+        # Only reserve budget for moves we're actually recommending — a
+        # "not worth it" or "cost unknown" suggestion is shown for
+        # transparency but the user isn't expected to act on it.
+        if is_actionable:
             cost_change = replacement["now_cost"] - player["now_cost"]
             remaining_budget -= cost_change
 
@@ -167,6 +185,29 @@ def suggest_captain(squad_df, fixtures_df, gameweek):
 
     return captain, vice_captain
 
+def suggest_triple_captain(captain_row, fixtures_df, gameweek, all_team_ids, chip_status, active_chip):
+    """
+    Returns a suggestion string if Triple Captain is available, not already
+    active, and the suggested captain's real-world team has a double
+    gameweek. Triple Captain multiplies captain points by 3 — most valuable
+    when that player has two matches to score in, not one.
+
+    Unlike Bench Boost's threshold, this is a simple yes/no: either your
+    specific captain doubles or they don't — there's no "how many" scale
+    to tune here.
+    """
+    if chip_status.get("3xc") != "available" or active_chip is not None:
+        return None
+
+    from analysis.team_analyzer import get_fixtures_counts
+    fixture_counts = get_fixtures_counts(fixtures_df, gameweek, all_team_ids)
+    captain_fixture_count = fixture_counts.get(captain_row["team"], 0)
+
+    if captain_fixture_count >= 2:
+        return (f"🔥 _Your captain pick, {captain_row['web_name']}, has a double gameweek in GW{gameweek} "
+                f"— Triple Captain (still available this half) could be especially valuable here._\n")
+    return None
+
 if __name__ == "__main__":
     from api.data_fetcher import get_players_dataframe, get_fixtures, get_current_gameweek, get_planning_gameweek
     from analysis.team_analyzer import get_squad_player_ids, build_squad_from_ids, get_free_transfers
@@ -191,7 +232,7 @@ if __name__ == "__main__":
     print("\n--- Transfer Suggestions ---")
     transfers, concern_count, concern_players = suggest_transfers(
         squad, all_players, player_ids, planning_gw, bank=bank,
-        free_transfers=free_transfers, active_chip=active_chip, n=3
+        free_transfers=free_transfers, active_chip=active_chip
     )
     print(transfers)
     print(f"\nSquad concern count: {concern_count}")
@@ -203,6 +244,24 @@ if __name__ == "__main__":
     print(f"Captain: {captain['web_name']} (score: {captain['captain_score']:.2f})")
     if vice_captain is not None:
         print(f"Vice-captain: {vice_captain['web_name']} (score: {vice_captain['captain_score']:.2f})")
+    from api.data_fetcher import get_teams
+    from analysis.team_analyzer import get_chip_status, suggest_bench_boost
+
+    all_team_ids = get_teams()
+    chip_status = get_chip_status(MY_TEAM_ID, planning_gw)
+
+    print("\n--- Bench Boost Suggestion ---")
+    bb = suggest_bench_boost(squad, fixtures_df, planning_gw, all_team_ids, chip_status, active_chip)
+    print(bb if bb else "(no nudge — not enough doubles, or chip unavailable/active)")
+
+    print("\n--- Triple Captain Suggestion ---")
+    tc = suggest_triple_captain(captain, fixtures_df, planning_gw, all_team_ids, chip_status, active_chip)
+    print(tc if tc else "(no nudge — captain doesn't double, or chip unavailable/active)")
+    from analysis.team_analyzer import suggest_free_hit
+
+    print("\n--- Free Hit Suggestion ---")
+    fh = suggest_free_hit(squad, fixtures_df, planning_gw, all_team_ids, chip_status, active_chip)
+    print(fh if fh else "(no nudge — not enough blanks, or chip unavailable/active)")
 
 
 
