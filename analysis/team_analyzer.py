@@ -74,6 +74,44 @@ def get_chip_status(team_id, current_gw):
     }
     return {c: ("used" if c in played_this_half else "available") for c in chip_types}
 
+GW19_WARNING_WINDOW = 5  # start warning once this many GWs or fewer remain before GW19
+
+def get_gw19_expiry_warning(chip_status, current_gw, window=GW19_WARNING_WINDOW):
+    """
+    Warns when the first-half chip deadline (GW19) is approaching AND the
+    manager still has unused first-half chips that will simply be lost if
+    not played before then. Returns None if:
+      - we're already past GW19 (second-half chips don't expire the same
+        way mid-season, so this check only matters pre-GW19), or
+      - GW19 is more than `window` gameweeks away (too early to be useful
+        — a warning 15 weeks out would just be ignored as noise), or
+      - every first-half chip is already used (nothing left to lose).
+    """
+    if current_gw > GW19_DEADLINE:
+        return None
+
+    gws_remaining = GW19_DEADLINE - current_gw
+    if gws_remaining > window:
+        return None
+
+    unused = [c for c, status in chip_status.items() if status == "available"]
+    if not unused:
+        return None
+
+    chip_names = {"wildcard": "Wildcard", "freehit": "Free Hit", "bboost": "Bench Boost", "3xc": "Triple Captain"}
+    readable = ", ".join(chip_names[c] for c in unused)
+
+    if gws_remaining == 0:
+        urgency = "This is your LAST gameweek to use them"
+    elif gws_remaining == 1:
+        urgency = "Only 1 gameweek left to use them"
+    else:
+        urgency = f"Only {gws_remaining} gameweeks left to use them"
+
+    return (f"⏰ **First-half chip deadline approaching (GW{GW19_DEADLINE}):** "
+            f"you still have {readable} unused. {urgency} — "
+            f"they do NOT carry over into the second half.\n")
+
 def get_squad_player_ids(team_id, gameweek):
     """
     Returns (status, player_ids, bank, active_chip).
@@ -371,3 +409,7 @@ if __name__ == "__main__":
         print("\n--- Fixture Outlook Message ---")
         outlook = get_fixture_outlook_message(squad, fixtures_df, PLANNING_GW, all_team_ids)
         print(outlook if outlook else "(nothing notable — normal gameweek)")
+        print("\n--- GW19 Expiry Warning ---")
+        chip_status = get_chip_status(MY_TEAM_ID, GAMEWEEK)
+        warning = get_gw19_expiry_warning(chip_status, GAMEWEEK)
+        print(warning if warning else "(no warning — too early, past GW19, or all chips used)")

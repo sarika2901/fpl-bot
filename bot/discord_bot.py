@@ -34,7 +34,7 @@ async def on_ready():
 
 from analysis.team_analyzer import (
     get_team_summary, get_squad_player_ids, build_squad_from_ids,
-    load_mock_squad, flag_injuries, suggest_starting_xi, get_free_transfers, get_chip_status, get_fixture_outlook_message, suggest_bench_boost, suggest_free_hit
+    load_mock_squad, flag_injuries, suggest_starting_xi, get_free_transfers, get_chip_status, get_fixture_outlook_message, suggest_bench_boost, suggest_free_hit, get_gw19_expiry_warning
 )
 # MY_TEAM_ID = int(os.getenv("MY_TEAM_ID"))
 GAMEWEEK = get_current_gameweek()
@@ -124,6 +124,10 @@ async def team_command(interaction: discord.Interaction, team_id: Optional[int] 
         chip_names = {"wildcard": "Wildcard", "freehit": "Free Hit", "bboost": "Bench Boost", "3xc": "Triple Captain"}
         readable = ", ".join(chip_names[c] for c in available_chips)
         lines.append(f"🃏 _Chips available this half: {readable}_")
+
+    gw19_warning = get_gw19_expiry_warning(chip_status, gameweek)
+    if gw19_warning:
+        lines.append(gw19_warning)
 
     planning_gw = get_planning_gameweek()
     all_team_ids = get_teams()
