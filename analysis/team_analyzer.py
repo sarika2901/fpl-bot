@@ -52,6 +52,14 @@ def get_free_transfers(team_id, gameweek):
 
 GW19_DEADLINE = 19
 
+GW19_WARNING_WINDOW = 5  # start warning once this many GWs or fewer remain before GW19
+
+BENCH_BOOST_DOUBLE_THRESHOLD = 6
+
+FREE_HIT_BLANK_THRESHOLD = 4
+
+CHIP_OUTLOOK_WINDOW = 6
+
 def get_chip_status(team_id, current_gw):
     """
     Returns a dict {"wildcard": "available"/"used"/"unknown", "freehit": ...,
@@ -74,7 +82,6 @@ def get_chip_status(team_id, current_gw):
     }
     return {c: ("used" if c in played_this_half else "available") for c in chip_types}
 
-GW19_WARNING_WINDOW = 5  # start warning once this many GWs or fewer remain before GW19
 
 def get_gw19_expiry_warning(chip_status, current_gw, window=GW19_WARNING_WINDOW):
     """
@@ -280,6 +287,67 @@ def classify_squad_fixture_impact(squad_df, fixture_counts):
         "double_players": doubles["web_name"].tolist(),
     }
 
+
+def scan_fixture_outlook(squad_df, fixtures_df, all_team_ids, start_gw, num_weeks=CHIP_OUTLOOK_WINDOW):
+    """
+    Scans `num_weeks` gameweeks starting at `start_gw`, returning a list of
+    per-gameweek blank/double counts for THIS squad. This is the
+    forward-looking counterpart to classify_squad_fixture_impact, which only
+    checks one gameweek — by the time congestion shows up as "this week's"
+    data, it's often too late to prepare for it with ordinary transfers.
+    Scanning ahead gives a manager lead time to act.
+    """
+    outlook = []
+    for gw in range(start_gw, start_gw + num_weeks):
+        fixture_counts = get_fixtures_counts(fixtures_df, gw, all_team_ids)
+        impact = classify_squad_fixture_impact(squad_df, fixture_counts)
+        outlook.append({"gameweek": gw, **impact})
+    return outlook
+
+def find_best_chip_gameweeks(outlook, bench_boost_threshold=BENCH_BOOST_DOUBLE_THRESHOLD,
+                              free_hit_threshold=FREE_HIT_BLANK_THRESHOLD):
+    """
+    Given scan_fixture_outlook's output, finds the single best upcoming
+    gameweek for Bench Boost (most doubles) and Free Hit (most blanks),
+    among weeks that clear their respective thresholds. Returns
+    {"bench_boost": {...} or None, "free_hit": {...} or None}.
+    """
+    bb_candidates = [gw for gw in outlook if gw["double_count"] >= bench_boost_threshold]
+    fh_candidates = [gw for gw in outlook if gw["blank_count"] >= free_hit_threshold]
+
+    best_bb = max(bb_candidates, key=lambda gw: gw["double_count"]) if bb_candidates else None
+    best_fh = max(fh_candidates, key=lambda gw: gw["blank_count"]) if fh_candidates else None
+
+    return {"bench_boost": best_bb, "free_hit": best_fh}
+
+def get_chip_outlook_message(squad_df, fixtures_df, start_gw, all_team_ids, chip_status, active_chip,
+                              num_weeks=CHIP_OUTLOOK_WINDOW):
+    """
+    Builds a forward-looking heads-up for Bench Boost/Free Hit across the
+    next `num_weeks` gameweeks. Only mentions a chip if it's still
+    available, not currently active, AND a qualifying week was found.
+    """
+    outlook = scan_fixture_outlook(squad_df, fixtures_df, all_team_ids, start_gw, num_weeks)
+    best = find_best_chip_gameweeks(outlook)
+
+    lines = []
+    if chip_status.get("bboost") == "available" and active_chip is None and best["bench_boost"]:
+        gw_info = best["bench_boost"]
+        lines.append(
+            f"🚀 _Looking ahead: GW{gw_info['gameweek']} looks like a strong Bench Boost week — "
+            f"{gw_info['double_count']} of your players have a double gameweek "
+            f"({', '.join(gw_info['double_players'])})._"
+        )
+    if chip_status.get("freehit") == "available" and active_chip is None and best["free_hit"]:
+        gw_info = best["free_hit"]
+        lines.append(
+            f"🎯 _Looking ahead: GW{gw_info['gameweek']} looks like a tough week — "
+            f"{gw_info['blank_count']} of your players have a blank gameweek "
+            f"({', '.join(gw_info['blank_players'])}), Free Hit could help here._"
+        )
+
+    return "\n".join(lines) if lines else None
+
 def get_fixture_outlook_message(squad_df, fixtures_df, gameweek, all_team_ids):
     """
     Builds a human-readable heads-up about blank/double gameweeks affecting
@@ -305,7 +373,6 @@ def get_fixture_outlook_message(squad_df, fixtures_df, gameweek, all_team_ids):
 
     return "\n".join(lines) if lines else None
 
-BENCH_BOOST_DOUBLE_THRESHOLD = 6
 
 def suggest_bench_boost(squad_df, fixtures_df, gameweek, all_team_ids, chip_status, active_chip,
                          threshold=BENCH_BOOST_DOUBLE_THRESHOLD):
@@ -334,7 +401,7 @@ def suggest_bench_boost(squad_df, fixtures_df, gameweek, all_team_ids, chip_stat
                 f"counts your whole squad's points — this could be a strong week to use it._\n")
     return None
 
-FREE_HIT_BLANK_THRESHOLD = 4
+
 
 def suggest_free_hit(squad_df, fixtures_df, gameweek, all_team_ids, chip_status, active_chip,
                       threshold=FREE_HIT_BLANK_THRESHOLD):
@@ -413,3 +480,7 @@ if __name__ == "__main__":
         chip_status = get_chip_status(MY_TEAM_ID, GAMEWEEK)
         warning = get_gw19_expiry_warning(chip_status, GAMEWEEK)
         print(warning if warning else "(no warning — too early, past GW19, or all chips used)")
+        print("\n--- Chip Outlook (next 6 GWs) ---")
+        chip_status = get_chip_status(MY_TEAM_ID, PLANNING_GW)
+        outlook_msg = get_chip_outlook_message(squad, fixtures_df, PLANNING_GW, all_team_ids, chip_status, active_chip)
+        print(outlook_msg if outlook_msg else "(nothing notable in the next 6 gameweeks)")

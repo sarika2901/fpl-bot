@@ -34,7 +34,9 @@ async def on_ready():
 
 from analysis.team_analyzer import (
     get_team_summary, get_squad_player_ids, build_squad_from_ids,
-    load_mock_squad, flag_injuries, suggest_starting_xi, get_free_transfers, get_chip_status, get_fixture_outlook_message, suggest_bench_boost, suggest_free_hit, get_gw19_expiry_warning
+    load_mock_squad, flag_injuries, suggest_starting_xi, get_free_transfers, get_chip_status,
+    get_fixture_outlook_message, suggest_bench_boost, suggest_free_hit, get_gw19_expiry_warning,
+    get_chip_outlook_message,
 )
 # MY_TEAM_ID = int(os.getenv("MY_TEAM_ID"))
 GAMEWEEK = get_current_gameweek()
@@ -286,6 +288,72 @@ async def captain_command(interaction: discord.Interaction, team_id: Optional[in
     vc_line = f"\nVice-captain: **{vice_captain['web_name']}**" if vice_captain is not None else ""
     await interaction.followup.send(f"{prefix}Captain pick for GW{planning_gw}: **{captain['web_name']}**{vc_line}")
 
+@tree.command(name="chips", description="See your chip status, deadline warning, and upcoming chip opportunities")
+@app_commands.describe(team_id="Your FPL team ID (find it in your FPL team URL)")
+async def chips_command(interaction: discord.Interaction, team_id: Optional[int] = None):
+    await interaction.response.defer()
+    if team_id is None:
+        team_id = get_registered_team(interaction.user.id)
+    if team_id is None:
+        await interaction.followup.send("⚠️ No team ID provided or registered. Use `/register team_id:<your id>` first.")
+        return
+
+    current_gw = get_current_gameweek()
+    status, player_ids, bank, active_chip = get_squad_player_ids(team_id, current_gw)
+
+    if status == "invalid_team_id":
+        await interaction.followup.send("❌ That team ID doesn't exist on the FPL site.")
+        return
+    elif status == "season_not_started":
+        await interaction.followup.send("🗓️ The season hasn't started for this team yet.")
+        return
+    elif status == "picks_unavailable":
+        await interaction.followup.send("⚠️ This gameweek's picks aren't available yet.")
+        return
+
+    planning_gw = get_planning_gameweek()
+    chip_status = get_chip_status(team_id, planning_gw)
+
+    try:
+        squad = build_squad_from_ids(player_ids)
+        fixtures_df = get_fixtures()
+        all_team_ids = get_teams()
+    except Exception as e:
+        print(f"[chips_command] error: {e}")
+        await interaction.followup.send("⚠️ Couldn't fetch live data right now — try again in a minute.")
+        return
+
+    chip_display_names = {"wildcard": "Wildcard", "freehit": "Free Hit", "bboost": "Bench Boost", "3xc": "Triple Captain"}
+    lines = ["**Chip Status:**"]
+    for chip_key, chip_label in chip_display_names.items():
+        emoji = "✅" if chip_status.get(chip_key) == "available" else "❌"
+        lines.append(f"{emoji} {chip_label}: {chip_status.get(chip_key)}")
+
+    if active_chip in CHIP_LABELS:
+        lines.append(f"\n{CHIP_LABELS[active_chip]}")
+
+    gw19_warning = get_gw19_expiry_warning(chip_status, current_gw)
+    if gw19_warning:
+        lines.append(f"\n{gw19_warning}")
+
+    bb_now = suggest_bench_boost(squad, fixtures_df, planning_gw, all_team_ids, chip_status, active_chip)
+    fh_now = suggest_free_hit(squad, fixtures_df, planning_gw, all_team_ids, chip_status, active_chip)
+    if bb_now or fh_now:
+        lines.append(f"\n**This week (GW{planning_gw}):**")
+        if bb_now:
+            lines.append(bb_now)
+        if fh_now:
+            lines.append(fh_now)
+
+    outlook_msg = get_chip_outlook_message(squad, fixtures_df, planning_gw, all_team_ids, chip_status, active_chip)
+    if outlook_msg:
+        lines.append("\n**Looking ahead:**")
+        lines.append(outlook_msg)
+
+    if not (bb_now or fh_now or outlook_msg or gw19_warning):
+        lines.append("\n_No chip-worthy signals right now — nothing urgent this week or in the coming gameweeks._")
+
+    await interaction.followup.send("\n".join(lines))
 
 
 @tree.command(name="register", description="Save your FPL team ID so you don't need to enter it every time")
